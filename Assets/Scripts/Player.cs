@@ -19,6 +19,13 @@ public class Player : MonoBehaviour
     [Tooltip("돌진 속도 감쇠 곡선(없으면 선형 1→0)")]
     [SerializeField] private AnimationCurve dashCurve = null;
 
+    [Header("Attack")]
+    [SerializeField] private string attackBoolParam = "isAttacking"; // 공격 잠금 Bool
+    [SerializeField] private string attackStateName = "Attack_1";    // 애니메이터 상태 이름
+    [SerializeField] private float attackDuration = 0.5f;          // 1타 전체 시간(초)
+    [SerializeField] private float attackLockMoveRatio = 0.8f;       // 몇 % 구간까지 이동/회전 금지할지 (0.8=80%)
+    [SerializeField] private float attackFade = 0.06f;               // Any→Attack 크로스페이드
+
     [Header("Animator Params / States")]
     [SerializeField] private string speedParam = "Speed";          // BlendTree 제어 float
     [SerializeField] private float speedDampTime = 0.10f;             // SetFloat 댐핑 시간
@@ -38,6 +45,8 @@ public class Player : MonoBehaviour
     private Animator anim;
     private Transform cam;
 
+    private bool isAttackingRuntime = false; // 코드 레벨 공격 중 (이동/회전 차단용)
+
     void Start()
     {
         anim = GetComponent<Animator>();
@@ -52,7 +61,7 @@ public class Player : MonoBehaviour
         if (anim) anim.SetFloat(speedParam, targetSpeed, speedDampTime, Time.deltaTime);
 
         // 대쉬 중이면 이동/회전은 코드로 막고, 애니메이션만 Speed가 천천히 맞춰진다
-        if (isDashing) return;
+        if (isDashing || isAttackingRuntime) return;
 
         if (targetSpeed < deadZone)
         {
@@ -94,6 +103,13 @@ public class Player : MonoBehaviour
         StartCoroutine(DashRoutine());
     }
 
+    void OnAttack(InputValue value)
+    {
+        if (!value.isPressed) return;
+        if (isDashing || isAttackingRuntime) return; // 돌진/공격 중엔 무시 (원하면 큐잉 가능)
+        StartCoroutine(AttackRoutine());
+    }
+
     private IEnumerator DashRoutine()
     {
         isDashing = true;
@@ -132,5 +148,47 @@ public class Player : MonoBehaviour
 
         isDashing = false;
         lastDashEndTime = Time.time;
+    }
+
+    private IEnumerator AttackRoutine()
+    {
+        isAttackingRuntime = true;
+
+        // 1) Animator: 공격 잠금 + 즉시 진입
+        if (anim)
+        {
+            anim.SetBool(attackBoolParam, true);
+            anim.CrossFadeInFixedTime(attackStateName, attackFade, 0, 0f);
+        }
+
+        // 2) 이동/회전 잠금 구간 (처음 x% 동안)
+        float lockTime = attackDuration * Mathf.Clamp01(attackLockMoveRatio);
+        float t = 0f;
+
+        // 이동/회전 완전 잠금
+        while (t < lockTime)
+        {
+            // Speed 파라미터는 계속 댐핑(너의 코드에 이미 있음)
+            // transform.Translate/rotation 같은 이동/회전은 하지 않음 (Update에서 isAttackingRuntime 체크 필요)
+            t += Time.deltaTime;
+            yield return null;
+        }
+
+        // 3) 나머지 구간: 천천히 이동/회전 허용(원하면 그대로 잠근 채로 끝까지 유지)
+        while (t < attackDuration)
+        {
+            // 가벼운 보정 필요 시 여기에 아주 작은 회전만 허용 가능
+            t += Time.deltaTime;
+            yield return null;
+        }
+
+        // 4) 잠금 해제 → Locomotion으로 복귀
+        if (anim)
+        {
+            anim.SetBool(attackBoolParam, false);
+            anim.CrossFadeInFixedTime(locomotionState, locomotionFade, 0, 0f); // 네가 쓰는 locomotionState/locomotionFade 사용
+        }
+
+        isAttackingRuntime = false;
     }
 }
